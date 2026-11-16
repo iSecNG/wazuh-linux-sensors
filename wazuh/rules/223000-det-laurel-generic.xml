@@ -49,7 +49,7 @@
     PROCTITLE.ARGV    - process title argument array
 -->
 
-<group name="laurel,">
+<group name="laurel,integration,">
 
 
   <!-- ===================================================================== -->
@@ -965,6 +965,7 @@
        one earlier event with another key, i.e. any two mechanisms in any order. -->
   <rule id="223352" level="13" frequency="2" timeframe="600">
     <if_matched_group>persistence</if_matched_group>
+    <same_location />
     <different_field>SYSCALL.key</different_field>
     <description>LAUREL: multiple persistence mechanisms modified in 10 minutes, possible multi-vector persistence installation.</description>
     <group>laurel,persistence,</group>

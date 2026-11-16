@@ -134,6 +134,17 @@ check_rule() {
     MARK=$(wc -c < "${FALCO_LOG}")
 }
 
+check_no_rule() {
+    local rule="$1" desc="$2"
+    sleep 3
+    if tail -c "+$((MARK + 1))" "${FALCO_LOG}" 2>/dev/null | grep -qF "\"rule\":\"${rule}\""; then
+        fail "${desc}  -- unexpected event with rule \"${rule}\""
+    else
+        pass "${desc}"
+    fi
+    MARK=$(wc -c < "${FALCO_LOG}")
+}
+
 # Advances MARK without asserting, for actions whose events we do not check.
 skip_events() { sleep 1; MARK=$(wc -c < "${FALCO_LOG}"); }
 
@@ -285,9 +296,12 @@ section "Anti-forensics and tooling"
 
 _hist="/root/.bash_history"
 if [[ -f "${_hist}" ]]; then
-    # Append nothing and rewrite in place, so no history content is lost.
-    touch "${_hist}"
+    # Appending is what shells do after every command and must stay quiet.
     : >> "${_hist}"
+    check_no_rule "Wazuh: Shell history tampered" \
+                  "Shell history append ignored"
+    # Open read-write without O_APPEND or O_TRUNC: matches, loses no content.
+    : 1<> "${_hist}"
     check_rule "Wazuh: Shell history tampered" \
                "Shell history file written"
 else

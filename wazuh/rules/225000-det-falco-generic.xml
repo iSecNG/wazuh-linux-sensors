@@ -35,7 +35,7 @@
     tail -1 /var/log/falco/events.json | /var/ossec/bin/wazuh-logtest
 -->
 
-<group name="falco,">
+<group name="falco,integration,">
 
 
   <!-- ===================================================================== -->
@@ -112,6 +112,20 @@
     <field name="rule">^Wazuh: Library preload file modified$</field>
     <description>Falco: ld.so.preload modified, HIGH RISK library injection or rootkit vector. $(output)</description>
     <group>falco,persistence,rootkit,</group>
+    <mitre>
+      <id>T1574.006</id>
+    </mitre>
+  </rule>
+
+  <!-- The Falco rule matches every /etc/ld.so* path, and ld.so.cache and
+       ld.so.conf get written by ldconfig and flatpak's bwrap all the time.
+       Only ld.so.preload stays at 14. Done as a child because a level-10
+       225115 would lose to the level-12 catch-all 225382. -->
+  <rule id="225118" level="10">
+    <if_sid>225115</if_sid>
+    <match type="pcre2" negate="yes">"(?:fd\.name|evt\.arg\.path)":"/etc/ld\.so\.preload"</match>
+    <description>Falco: dynamic linker config (/etc/ld.so*) modified. $(output)</description>
+    <group>falco,persistence,</group>
     <mitre>
       <id>T1574.006</id>
     </mitre>

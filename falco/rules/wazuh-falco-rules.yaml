@@ -130,7 +130,9 @@
     /usr/bin/containerd-shim-runc-v2, /usr/sbin/runc, /usr/bin/runc,
     /usr/bin/crio, /usr/bin/podman, /usr/bin/conmon,
     /usr/sbin/tailscaled, /usr/bin/tailscaled, /usr/bin/cilium-agent,
-    /usr/bin/lxcfs, /usr/sbin/lxcfs
+    /usr/bin/lxcfs, /usr/sbin/lxcfs,
+    /usr/bin/virtqemud, /usr/sbin/virtqemud,
+    /usr/bin/libvirtd, /usr/sbin/libvirtd
   ]
 
 # The tools whose job is to read SSH key material. Paths, not names: a payload
@@ -447,9 +449,14 @@
   desc: >
     A shell history file was truncated, deleted or redirected, or history was
     cleared in-session. Anti-forensic cleanup after interactive access.
+    O_APPEND opens are skipped: shells append to their own history after every
+    command (zsh share_history, bash histappend) and appending removes nothing.
+    Truncation (O_TRUNC), in-place overwrites such as shred, and rename, unlink
+    or truncate still match.
   condition: >
     (
-      (wz_file_replaced or wz_open_write)
+      (wz_file_replaced
+       or (wz_open_write and not evt.arg.flags contains O_APPEND))
       and fd.filename in (wz_history_files)
     )
     or (

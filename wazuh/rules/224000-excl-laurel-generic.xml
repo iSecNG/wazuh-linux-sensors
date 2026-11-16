@@ -1,4 +1,4 @@
-<group name="laurel,">
+<group name="laurel,integration,">
 
   <!-- wazuh-syscheckd walks /var/log/audit during FIM scans (read-only openat).
        Kept out of audit_tampering so it does not feed composite rule 223351. -->
@@ -42,10 +42,16 @@
     <group>laurel,service_generator,</group>
   </rule>
 
-  <!-- 224004 (FIM-scanner access_denied whitelist) was removed: its parent
-       223174 is now level 3, so suppressing it to level 3 achieved nothing.
-       Rule 223175, the access_denied burst rule it existed to protect, is gone
-       too - Falco owns burst detection now. -->
+  <!-- The FIM scanner probes each watched path with openat(O_DIRECTORY); on a
+       regular file that returns ENOTDIR, so every scan pass produces a batch of
+       access_denied events. 223174 is in the reconnaissance group, which feeds
+       225300; this child takes the FIM scan out of it. -->
+  <rule id="224004" level="3">
+    <if_sid>223174</if_sid>
+    <field name="SYSCALL.exe" type="pcre2">^/var/ossec/bin/wazuh-syscheckd$</field>
+    <description>LAUREL: failed file access by wazuh-syscheckd FIM scan (whitelisted).</description>
+    <group>laurel,fim_access,</group>
+  </rule>
 
   <!-- The SCA module shells out to find/findmnt against /var/log/audit on every
        scan cycle for the CIS auditd checks. That is several audit_tampering events
@@ -57,6 +63,57 @@
     <field name="SYSCALL.SPAWNED_BY.exe" type="pcre2">^/var/ossec/bin/wazuh-modulesd$</field>
     <description>LAUREL: audit log access by a wazuh-modulesd SCA check (whitelisted).</description>
     <group>laurel,audit_access,</group>
+  </rule>
+
+  <!-- The plocate-updatedb timer walks the filesystem and opens /var/log/audit
+       read-only (openat O_DIRECTORY) to index it. Outside audit_tampering so
+       it does not feed 223351. -->
+  <rule id="224006" level="3">
+    <if_sid>223110</if_sid>
+    <field name="SYSCALL.exe" type="pcre2">^/usr/sbin/updatedb\.plocate$</field>
+    <description>LAUREL: audit log directory indexed by updatedb.plocate (whitelisted).</description>
+    <group>laurel,audit_access,</group>
+  </rule>
+
+  <!-- logcollector reading audit.log. 223114 keeps it in audit_tampering,
+       which trips 223351; this moves it out. -->
+  <rule id="224007" level="0">
+    <if_sid>223114</if_sid>
+    <field name="SYSCALL.exe" type="pcre2">^/var/ossec/bin/wazuh-logcollector$</field>
+    <description>LAUREL: audit log read by wazuh-logcollector (whitelisted).</description>
+    <group>laurel,audit_access,</group>
+  </rule>
+
+  <!-- sudo trying to create ~/.sudo_as_admin_successful on every call (Ubuntu),
+       fails with EEXIST. Feeds 225300 via the reconnaissance group. -->
+  <rule id="224008" level="0">
+    <if_sid>223174</if_sid>
+    <field name="SYSCALL.exe" type="pcre2">^/usr/bin/sudo$</field>
+    <field name="SYSCALL.exit" type="pcre2">^-17$</field>
+    <match type="pcre2">"name":"/home/[^"/]+/\.sudo_as_admin_successful"</match>
+    <description>LAUREL: sudo touching .sudo_as_admin_successful (whitelisted).</description>
+    <group>laurel,audit_access,</group>
+  </rule>
+
+  <!-- dpkg unpack tries to rmdir /etc/ld.so.conf.d/, fails, changes nothing; kept out of persistence so it does not feed 223352. -->
+  <rule id="224009" level="3">
+    <if_sid>223171</if_sid>
+    <field name="SYSCALL.exe" type="pcre2">^/usr/bin/dpkg$</field>
+    <field name="SYSCALL.syscall" type="pcre2">^84$</field>
+    <field name="SYSCALL.success" type="pcre2">^no$</field>
+    <field name="PATH" type="pcre2">"/etc/ld\.so\.conf\.d/"</field>
+    <description>LAUREL: failed rmdir on ld.so.conf.d by dpkg (whitelisted).</description>
+    <group>laurel,package_mgmt,</group>
+  </rule>
+
+  <!-- apt-get driven dpkg installing or replacing packaged unit files; kept out of persistence so it does not feed 223352. -->
+  <rule id="224010" level="3">
+    <if_sid>223141</if_sid>
+    <field name="SYSCALL.exe" type="pcre2">^/usr/bin/dpkg$</field>
+    <field name="SYSCALL.SPAWNED_BY.exe" type="pcre2">^/usr/bin/apt-get$</field>
+    <field name="PATH" type="pcre2">"/usr/lib/systemd/</field>
+    <description>LAUREL: packaged systemd unit file changed by dpkg (whitelisted).</description>
+    <group>laurel,package_mgmt,</group>
   </rule>
 
 </group>

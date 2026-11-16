@@ -28,7 +28,7 @@
   Falco rule does not have.
 -->
 
-<group name="falco,">
+<group name="falco,integration,">
 
   <!-- The Wazuh SCA module reads the files it assesses. On every scan cycle
        wazuh-modulesd opens /etc/shadow, /etc/sudoers, /etc/sudoers.d/* and
@@ -36,6 +36,9 @@
        sensitive_files list, so upstream's "Read sensitive file untrusted"
        fires and 225140 raises it to level 10. Measured on the test host: 47
        such events in one soak, every one of them the agent assessing itself.
+       wazuh-syscheckd (FIM) opens the same files on every syscheck scan.
+       Matched on exepath, so a binary that is only named like the agent
+       still alerts.
 
        Level 0 rather than 3: these recur on a fixed schedule and carry no
        forensic value, and the same read is already recorded by auditd under
@@ -49,8 +52,8 @@
        here only costs noise. -->
   <rule id="226002" level="0">
     <if_sid>225140</if_sid>
-    <field name="output_fields.proc.name">^wazuh-modulesd$</field>
-    <description>Falco: sensitive file read by the Wazuh SCA module (whitelisted).</description>
+    <field name="output_fields.proc.exepath" type="pcre2">^/var/ossec/bin/wazuh-(?:modulesd|syscheckd)$</field>
+    <description>Falco: sensitive file read by the Wazuh agent's SCA or FIM module (whitelisted).</description>
     <group>falco,sca_access,</group>
   </rule>
 
@@ -80,6 +83,114 @@
     <field name="output_fields.proc.pname">^never_match_apt$|^never_match_dnf$|^never_match_unattended-upgr$</field>
     <description>Falco: data transfer by a package manager (whitelisted).</description>
     <group>falco,exfiltration,</group>
+  </rule>
+
+  <!-- Container agent entrypoint filling CHANGE_* placeholders in ossec.conf
+       via sed -i. Only placeholder replacements match; '.' stands in for < >. -->
+  <rule id="226003" level="3">
+    <if_sid>225116</if_sid>
+    <field name="output_fields.container.id" type="pcre2">^[0-9a-f]{12}$</field>
+    <field name="output_fields.proc.cmdline" type="pcre2">^sed -i s#.(agent_name|manager_address|address|port|groups).CHANGE_[A-Z_]+./\1.#.\1.[\w.:,-]+./\1.#g /var/ossec/etc/ossec\.conf$</field>
+    <description>Falco: container agent placeholder set in ossec.conf (whitelisted).</description>
+    <group>falco,sensor_config,</group>
+  </rule>
+
+  <!-- Docker HEALTHCHECK curl to localhost every 30s, trips 225301.
+       Plain GET only, no -d/-T/-o/-X. -->
+  <rule id="226004" level="0">
+    <if_sid>225152</if_sid>
+    <field name="output_fields.container.id" type="pcre2">^[0-9a-f]{12}$</field>
+    <field name="output_fields.proc.cmdline" type="pcre2">^curl(?: (?:--silent|--fail|-s|-f|-sf|-fs|-fsS|-sSf))* https?://(?:localhost|127\.0\.0\.1)(?::\d+)?/[\w/.-]*$</field>
+    <description>Falco: container healthcheck curl to localhost (whitelisted).</description>
+    <group>falco,healthcheck,</group>
+  </rule>
+
+  <!-- bwrap (flatpak apps, glycin image loaders, xdg-desktop-portal)
+       creates ld.so.cache/ld.so.conf as bind-mount targets inside its
+       sandbox. Child of 225118, so ld.so.preload (225115) is never
+       whitelisted. -->
+  <rule id="226005" level="0">
+    <if_sid>225118</if_sid>
+    <field name="output_fields.container.id">^host$</field>
+    <field name="output_fields.proc.exepath" type="pcre2">^/usr/bin/bwrap$</field>
+    <field name="output_fields.fd.name" type="pcre2">^/etc/ld\.so\.(?:cache|conf)$</field>
+    <description>Falco: ld.so.* sandbox mount target created by bwrap (whitelisted).</description>
+    <group>falco,sandbox,</group>
+  </rule>
+
+  <!-- KDE screen unlock (kscreenlocker_greet, as the user) and SDDM login
+       (sddm-helper, as root) load the PAM stack and read /etc/pam.d/* on
+       every unlock and login. pam.d only: /etc/shadow read by either still
+       reaches 225140. -->
+  <rule id="226006" level="0">
+    <if_sid>225140</if_sid>
+    <field name="output_fields.container.id">^host$</field>
+    <field name="output_fields.proc.exepath" type="pcre2">^/usr/libexec/(?:kscreenlocker_greet|sddm-helper)$</field>
+    <field name="output_fields.fd.name" type="pcre2">^/etc/pam\.d/[\w.-]+$</field>
+    <description>Falco: PAM config read by KDE screen locker or SDDM login (whitelisted).</description>
+    <group>falco,desktop,</group>
+  </rule>
+
+  <!-- pam_kwallet_init hands the login password to kwalletd over its user
+       socket with socat. The Falco rule carries no exepath, so this is a
+       name and cmdline match: level 3, and only this exact UNIX-socket form. -->
+  <rule id="226007" level="3">
+    <if_sid>225134</if_sid>
+    <field name="output_fields.container.id">^host$</field>
+    <field name="output_fields.proc.pname">^pam_kwallet_ini$</field>
+    <field name="output_fields.proc.cmdline" type="pcre2">^socat STDIN UNIX-CONNECT:/run/user/\d+/kwallet[56]\.socket$</field>
+    <description>Falco: socat used by pam_kwallet_init to unlock KWallet (whitelisted).</description>
+    <group>falco,desktop,</group>
+  </rule>
+
+  <!-- s6-overlay (Wazuh and many other images) creates each service's
+       supervise dir setgid+sticky on container start. Containers only, and
+       never with the setuid bit. No exepath in this Falco rule, so level 3. -->
+  <rule id="226008" level="3">
+    <if_sid>225131</if_sid>
+    <field name="output_fields.container.id" type="pcre2">^[0-9a-f]{12}$</field>
+    <field name="output_fields.proc.pname">^s6-svscan$</field>
+    <field name="output_fields.proc.cmdline" type="pcre2">^s6-supervise [\w.-]+$</field>
+    <field name="output_fields.evt.arg.mode" type="pcre2">^(?!.*S_ISUID)[A-Z_|]+$</field>
+    <description>Falco: s6-supervise created a setgid service dir in a container (whitelisted).</description>
+    <group>falco,container_init,</group>
+  </rule>
+
+  <!-- Same as 226005, for the flatpak bwrap events where Falco could not
+       resolve the exepath (reported as ""). Name and cmdline only, so level
+       3; ld.so.preload is still never reached (225115). -->
+  <rule id="226009" level="3">
+    <if_sid>225118</if_sid>
+    <field name="output_fields.container.id">^host$</field>
+    <match>"proc.exepath":""</match>
+    <field name="output_fields.proc.name">^bwrap$</field>
+    <field name="output_fields.proc.cmdline" type="pcre2">^bwrap --args \d+ -- </field>
+    <field name="output_fields.fd.name" type="pcre2">^/etc/ld\.so\.(?:cache|conf)$</field>
+    <description>Falco: ld.so.* sandbox mount target created by flatpak bwrap, exepath unresolved (whitelisted).</description>
+    <group>falco,sandbox,</group>
+  </rule>
+
+  <!-- dnf5 rotates its own log (dnf5.log -> dnf5.log.1), which upstream's
+       "Clear Log Activities" reports via the 225381 catch-all. -->
+  <rule id="226010" level="0">
+    <if_sid>225381</if_sid>
+    <field name="rule">^Clear Log Activities$</field>
+    <field name="output_fields.proc.exepath" type="pcre2">^/usr/bin/dnf5$</field>
+    <field name="output_fields.fd.name" type="pcre2">^/var/log/dnf5\.log(?:\.\d+)?$</field>
+    <description>Falco: dnf5 rotating its own log (whitelisted).</description>
+    <group>falco,package_management,</group>
+  </rule>
+
+  <!-- The wazuh-docker manager entrypoint copies the mounted config into
+       /var/ossec on every container start. Level 3 and no sensor_tampering
+       group, so it no longer counts toward 225302. -->
+  <rule id="226011" level="3">
+    <if_sid>225116</if_sid>
+    <field name="output_fields.container.id" type="pcre2">^[0-9a-f]{12}$</field>
+    <field name="output_fields.proc.cmdline" type="pcre2">^cp (?:--coreutils-prog-shebang=cp /usr/bin/cp )?--verbose -r /wazuh-config-mount/etc /var/ossec$</field>
+    <field name="output_fields.fd.name" type="pcre2">^/var/ossec/etc/</field>
+    <description>Falco: wazuh-docker entrypoint copying mounted config (whitelisted).</description>
+    <group>falco,sensor_config,</group>
   </rule>
 
 </group>
